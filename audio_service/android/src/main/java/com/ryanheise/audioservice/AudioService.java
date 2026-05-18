@@ -538,17 +538,32 @@ public class AudioService extends MediaBrowserServiceCompat {
 
         if (queueIndex != null)
             stateBuilder.setActiveQueueItemId(queueIndex);
-        if (errorCode != null && errorMessage != null)
+        Bundle stateExtras = new Bundle();
+
+        if (errorCode != null && errorMessage != null) {
             stateBuilder.setErrorMessage(errorCode, errorMessage);
-        else if (errorMessage != null)
+            if (errorCode == PlaybackStateCompat.ERROR_CODE_AUTHENTICATION_EXPIRED) {
+                Intent signInIntent = new Intent();
+                signInIntent.setComponent(new ComponentName(getPackageName(), "de.vito0912.yaabsa.SignInActivity"));
+                signInIntent.putExtra("openSettings", true);
+                signInIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                PendingIntent signInActivityPendingIntent = PendingIntent.getActivity(this, 0,
+                        signInIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                stateExtras.putString("android.media.extras.ERROR_RESOLUTION_ACTION_LABEL", "Sign in");
+                stateExtras.putParcelable("android.media.extras.ERROR_RESOLUTION_ACTION_INTENT", signInActivityPendingIntent);
+            }
+        } else if (errorMessage != null) {
             stateBuilder.setErrorMessage(-987654, errorMessage);
+        }
 
         if (mediaMetadata != null) {
             // Update the progress bar in the browse view as content is playing as explained
             // here: https://developer.android.com/training/cars/media#browse-progress-bar
-            Bundle extras = new Bundle();
-            extras.putString(MediaConstants.PLAYBACK_STATE_EXTRAS_KEY_MEDIA_ID, mediaMetadata.getDescription().getMediaId());
-            stateBuilder.setExtras(extras);
+            stateExtras.putString(MediaConstants.PLAYBACK_STATE_EXTRAS_KEY_MEDIA_ID, mediaMetadata.getDescription().getMediaId());
+        }
+
+        if (!stateExtras.isEmpty()) {
+            stateBuilder.setExtras(stateExtras);
         }
 
         mediaSession.setPlaybackState(stateBuilder.build());
@@ -562,7 +577,7 @@ public class AudioService extends MediaBrowserServiceCompat {
             exitPlayingState();
         }
 
-        if (oldProcessingState != AudioProcessingState.idle && processingState == AudioProcessingState.idle) {
+        if (oldProcessingState != AudioProcessingState.idle && oldProcessingState != AudioProcessingState.error && processingState == AudioProcessingState.idle) {
             // TODO: Handle completed state as well?
             stop();
         } else if (processingState != AudioProcessingState.idle && notificationChanged) {

@@ -551,7 +551,11 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                 audioHandlerInterface.invokeMethod("getChildren", args, new MethodChannel.Result() {
                     @Override
                     public void error(String errorCode, String errorMessage, Object errorDetails) {
-                        result.sendError(new Bundle());
+                        if ("authentication_expired".equals(errorCode)) {
+                            result.sendResult(null);
+                        } else {
+                            result.sendError(new Bundle());
+                        }
                     }
 
                     @Override
@@ -944,7 +948,12 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                 case "notifyChildrenChanged": {
                     String parentMediaId = (String)args.get("parentMediaId");
                     Map<?, ?> options = (Map<?, ?>)args.get("options");
-                    AudioService.instance.notifyChildrenChanged(parentMediaId, mapToBundle(options));
+                    Bundle optionsBundle = mapToBundle(options);
+                    if (optionsBundle != null) {
+                        AudioService.instance.notifyChildrenChanged(parentMediaId, optionsBundle);
+                    } else {
+                        AudioService.instance.notifyChildrenChanged(parentMediaId);
+                    }
                     result.success(null);
                     break;
                 }
