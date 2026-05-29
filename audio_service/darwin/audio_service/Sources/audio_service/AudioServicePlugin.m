@@ -2,6 +2,8 @@
 #import <AVFoundation/AVFoundation.h>
 #import <MediaPlayer/MediaPlayer.h>
 
+NSString * const AudioServiceChildrenChangedNotification = @"AudioServiceChildrenChangedNotification";
+
 // If you'd like to help, please see the TODO comments below, then open a
 // GitHub issue to announce your intention to work on a particular feature, and
 // submit a pull request. We have an open discussion over at issue #10 about
@@ -10,6 +12,7 @@
 
 static NSHashTable<AudioServicePlugin *> *plugins = nil;
 static FlutterMethodChannel *handlerChannel = nil;
+static id<FlutterBinaryMessenger> _sharedMessenger = nil;
 static FlutterResult startResult = nil;
 static MPRemoteCommandCenter *commandCenter = nil;
 static NSMutableDictionary *mediaItem = nil;
@@ -33,8 +36,13 @@ static NSMutableDictionary *nowPlayingInfo = nil;
     FlutterMethodChannel *_channel;
 }
 
++ (id<FlutterBinaryMessenger>)binaryMessenger {
+    return _sharedMessenger;
+}
+
 + (void)registerWithRegistrar:(NSObject<FlutterPluginRegistrar>*)registrar {
     @synchronized(self) {
+        _sharedMessenger = [registrar messenger];
         if (!plugins) {
             plugins = [NSHashTable weakObjectsHashTable];
         }
@@ -165,6 +173,7 @@ static NSMutableDictionary *nowPlayingInfo = nil;
             int actionCode = 1 << [actionIndex intValue];
             actionBits |= actionCode;
         }
+        enum AudioProcessingState oldProcessingState = processingState;
         processingState = [stateMap[@"processingState"] intValue];
         BOOL oldPlaying = playing;
         NSNumber *oldSpeed = speed;
@@ -185,7 +194,8 @@ static NSMutableDictionary *nowPlayingInfo = nil;
         [self updateControls];
         if (playing != oldPlaying ||
             speed.doubleValue != oldSpeed.doubleValue ||
-            position.longLongValue != oldPosition.longLongValue) {
+            position.longLongValue != oldPosition.longLongValue ||
+            processingState != oldProcessingState) {
             [self updateNowPlayingInfo];
         }
         result(@{});
@@ -224,6 +234,16 @@ static NSMutableDictionary *nowPlayingInfo = nil;
     } else if ([@"setPlaybackInfo" isEqualToString:call.method]) {
         result(@{});
     } else if ([@"notifyChildrenChanged" isEqualToString:call.method]) {
+        NSDictionary *ncArgs = (NSDictionary *)call.arguments;
+        NSString *parentMediaId = ncArgs[@"parentMediaId"];
+        if (parentMediaId && parentMediaId != (id)[NSNull null]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [[NSNotificationCenter defaultCenter]
+                    postNotificationName:AudioServiceChildrenChangedNotification
+                    object:nil
+                    userInfo:@{@"parentMediaId": parentMediaId}];
+            });
+        }
         result(@{});
     } else if ([@"androidForceEnableMediaButtons" isEqualToString:call.method]) {
         result(@{});
@@ -289,16 +309,19 @@ static NSMutableDictionary *nowPlayingInfo = nil;
     updated |= [self updateNowPlayingField:MPNowPlayingInfoPropertyDefaultPlaybackRate value:(playing ? speed : [NSNumber numberWithDouble: 0.0])];
     updated |= [self updateNowPlayingField:MPNowPlayingInfoPropertyElapsedPlaybackTime value:[NSNumber numberWithDouble:([position doubleValue] / 1000)]];
     MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
-#if TARGET_OS_OSX
     if (@available(iOS 13.0, macOS 10.12.2, *)) {
-        center.playbackState = playing ? MPNowPlayingPlaybackStatePlaying : MPNowPlayingPlaybackStatePaused;
+        MPNowPlayingPlaybackState playbackState = MPNowPlayingPlaybackStatePaused;
+        if (processingState == ApsIdle) {
+            playbackState = MPNowPlayingPlaybackStateStopped;
+        } else if (playing && (processingState == ApsReady || processingState == ApsCompleted)) {
+            playbackState = MPNowPlayingPlaybackStatePlaying;
+        }
+        center.playbackState = playbackState;
     }
-#endif
     if (@available(iOS 10.0, macOS 10.12.2, *)) {
         updated |= [self updateNowPlayingField:MPNowPlayingInfoPropertyIsLiveStream value:mediaItem[@"isLive"]];
     }
-    if (updated) {
-        //NSLog(@"### updating nowPlayingInfo");
+    if (updated || center.nowPlayingInfo == nil) {
         center.nowPlayingInfo = nowPlayingInfo;
     }
   
@@ -472,13 +495,13 @@ static NSMutableDictionary *nowPlayingInfo = nil;
 
 - (MPRemoteCommandHandlerStatus) nextTrack: (MPRemoteCommandEvent *) event {
     //NSLog(@"nextTrack");
-    [handlerChannel invokeMethod:@"skipToNext" arguments:@{}];
+    [handlerChannel invokeMethod:@"fastForward" arguments:@{}];
     return MPRemoteCommandHandlerStatusSuccess;
 }
 
 - (MPRemoteCommandHandlerStatus) previousTrack: (MPRemoteCommandEvent *) event {
     //NSLog(@"previousTrack");
-    [handlerChannel invokeMethod:@"skipToPrevious" arguments:@{}];
+    [handlerChannel invokeMethod:@"rewind" arguments:@{}];
     return MPRemoteCommandHandlerStatusSuccess;
 }
 
@@ -492,13 +515,13 @@ static NSMutableDictionary *nowPlayingInfo = nil;
 
 - (MPRemoteCommandHandlerStatus) skipForward: (MPRemoteCommandEvent *) event {
     //NSLog(@"skipForward");
-    [handlerChannel invokeMethod:@"fastForward" arguments:@{}];
+    [handlerChannel invokeMethod:@"skipToNext" arguments:@{}];
     return MPRemoteCommandHandlerStatusSuccess;
 }
 
 - (MPRemoteCommandHandlerStatus) skipBackward: (MPRemoteCommandEvent *) event {
     //NSLog(@"skipBackward");
-    [handlerChannel invokeMethod:@"rewind" arguments:@{}];
+    [handlerChannel invokeMethod:@"skipToPrevious" arguments:@{}];
     return MPRemoteCommandHandlerStatusSuccess;
 }
 

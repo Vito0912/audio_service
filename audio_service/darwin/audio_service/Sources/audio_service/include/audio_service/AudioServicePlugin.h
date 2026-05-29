@@ -5,9 +5,13 @@
 #import <Flutter/Flutter.h>
 #endif
 
+extern NSString * const AudioServiceChildrenChangedNotification;
+
 @interface AudioServicePlugin : NSObject<FlutterPlugin>
 
 @property (readonly, nonatomic) FlutterMethodChannel *channel;
+
++ (id<FlutterBinaryMessenger>)binaryMessenger;
 
 @end
 
