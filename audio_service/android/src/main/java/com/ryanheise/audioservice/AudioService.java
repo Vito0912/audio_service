@@ -545,8 +545,10 @@ public class AudioService extends MediaBrowserServiceCompat {
             if (errorCode == PlaybackStateCompat.ERROR_CODE_AUTHENTICATION_EXPIRED) {
                 Intent signInIntent = new Intent();
                 signInIntent.setComponent(new ComponentName(getPackageName(), "de.vito0912.yaabsa.SignInActivity"));
-                signInIntent.putExtra("openSettings", true);
-                signInIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            signInIntent.addFlags(
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    | Intent.FLAG_ACTIVITY_NEW_TASK);
                 PendingIntent signInActivityPendingIntent = PendingIntent.getActivity(this, 0,
                         signInIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
                 stateExtras.putString("android.media.extras.ERROR_RESOLUTION_ACTION_LABEL", "Sign in");
