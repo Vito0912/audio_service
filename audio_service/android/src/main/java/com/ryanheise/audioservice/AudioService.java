@@ -134,6 +134,8 @@ public class AudioService extends MediaBrowserServiceCompat {
             builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration);
         if (artUri != null) {
             builder.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, artUri);
+            builder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, artUri);
+            builder.putString(MediaMetadataCompat.METADATA_KEY_ART_URI, artUri);
         }
         if (playable != null)
             builder.putLong("playable_long", playable ? 1 : 0);
@@ -805,14 +807,15 @@ public class AudioService extends MediaBrowserServiceCompat {
         if (artCacheFilePath != null) {
             // Load local files and network images, cached in files
             artBitmap = loadArtBitmap(artCacheFilePath, null);
-            mediaMetadata = putArtToMetadata(mediaMetadata);
+            Uri artContentUri = buildCoversContentUri(artCacheFilePath);
+            mediaMetadata = putArtToMetadata(mediaMetadata, artContentUri);
         } else {
             // Load content:// URIs
             String artUri = mediaMetadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI);
             if (artUri != null && artUri.startsWith("content:")) {
                 String loadThumbnailUri = mediaMetadata.getString("loadThumbnailUri");
                 artBitmap = loadArtBitmap(artUri, loadThumbnailUri);
-                mediaMetadata = putArtToMetadata(mediaMetadata);
+                mediaMetadata = putArtToMetadata(mediaMetadata, null);
             } else {
                 artBitmap = null;
             }
@@ -823,11 +826,30 @@ public class AudioService extends MediaBrowserServiceCompat {
         handler.post(this::updateNotification);
     }
 
-    private MediaMetadataCompat putArtToMetadata(MediaMetadataCompat mediaMetadata) {
-        return new MediaMetadataCompat.Builder(mediaMetadata)
+    private Uri buildCoversContentUri(String filePath) {
+        try {
+            String authority = getPackageName() + ".covers";
+            String fileUri = Uri.fromFile(new java.io.File(filePath)).toString();
+            String encoded = android.util.Base64.encodeToString(
+                    fileUri.getBytes("UTF-8"),
+                    android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP);
+            return Uri.parse("content://" + authority + "/" + encoded);
+        } catch (Exception e) {
+            return Uri.fromFile(new java.io.File(filePath));
+        }
+    }
+
+    private MediaMetadataCompat putArtToMetadata(MediaMetadataCompat mediaMetadata, Uri artContentUri) {
+        MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder(mediaMetadata)
                 .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artBitmap)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, artBitmap)
-                .build();
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, artBitmap);
+        if (artContentUri != null) {
+            String uriStr = artContentUri.toString();
+            builder.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, uriStr);
+            builder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, uriStr);
+            builder.putString(MediaMetadataCompat.METADATA_KEY_ART_URI, uriStr);
+        }
+        return builder.build();
     }
 
     @Override
