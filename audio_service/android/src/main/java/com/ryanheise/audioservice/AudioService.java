@@ -103,11 +103,36 @@ public class AudioService extends MediaBrowserServiceCompat {
     static AudioService instance;
     private static PendingIntent contentIntent;
     private static ServiceListener listener;
+    private static final List<PendingAction> pendingActions = new ArrayList<>();
     private static List<MediaSessionCompat.QueueItem> queue = new ArrayList<>();
     private static final Map<String, MediaMetadataCompat> mediaMetadataCache = new HashMap<>();
 
+    private interface PendingAction {
+        void invoke(ServiceListener listener);
+    }
+
+    private static void dispatchOrQueue(PendingAction action) {
+        final ServiceListener activeListener;
+        synchronized (AudioService.class) {
+            activeListener = listener;
+            if (activeListener == null) {
+                pendingActions.add(action);
+                return;
+            }
+        }
+        action.invoke(activeListener);
+    }
+
     public static void init(ServiceListener listener) {
-        AudioService.listener = listener;
+        final List<PendingAction> actions;
+        synchronized (AudioService.class) {
+            AudioService.listener = listener;
+            actions = new ArrayList<>(pendingActions);
+            pendingActions.clear();
+        }
+        for (PendingAction action : actions) {
+            action.invoke(listener);
+        }
     }
 
     public static int toKeyCode(long action) {
@@ -362,9 +387,14 @@ public class AudioService extends MediaBrowserServiceCompat {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (listener != null) {
-            listener.onDestroy();
+        final ServiceListener destroyedListener;
+        synchronized (AudioService.class) {
+            destroyedListener = listener;
             listener = null;
+            pendingActions.clear();
+        }
+        if (destroyedListener != null) {
+            destroyedListener.onDestroy();
         }
         mediaMetadata = null;
         artBitmap = null;
@@ -957,14 +987,13 @@ public class AudioService extends MediaBrowserServiceCompat {
 
         @Override
         public void onPlay() {
-            if (listener == null) return;
-            listener.onPlay();
+            dispatchOrQueue(ServiceListener::onPlay);
         }
 
         @Override
         public void onPlayFromMediaId(final String mediaId, final Bundle extras) {
-            if (listener == null) return;
-            listener.onPlayFromMediaId(mediaId, extras);
+            final Bundle extrasCopy = extras == null ? null : new Bundle(extras);
+            dispatchOrQueue(listener -> listener.onPlayFromMediaId(mediaId, extrasCopy));
         }
 
         @Override
@@ -1118,16 +1147,18 @@ public class AudioService extends MediaBrowserServiceCompat {
 
         @Override
         public void onCustomAction(String action, Bundle extras) {
-            if (listener == null) return;
-            if (CUSTOM_ACTION_STOP.equals(action)) {
-                listener.onStop();
-            } else if (CUSTOM_ACTION_FAST_FORWARD.equals(action)) {
-                listener.onFastForward();
-            } else if (CUSTOM_ACTION_REWIND.equals(action)) {
-                listener.onRewind();
-            } else {
-                listener.onCustomAction(action, extras);
-            }
+            final Bundle extrasCopy = extras == null ? null : new Bundle(extras);
+            dispatchOrQueue(listener -> {
+                if (CUSTOM_ACTION_STOP.equals(action)) {
+                    listener.onStop();
+                } else if (CUSTOM_ACTION_FAST_FORWARD.equals(action)) {
+                    listener.onFastForward();
+                } else if (CUSTOM_ACTION_REWIND.equals(action)) {
+                    listener.onRewind();
+                } else {
+                    listener.onCustomAction(action, extrasCopy);
+                }
+            });
         }
 
         @Override
