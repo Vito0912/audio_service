@@ -495,13 +495,13 @@ static NSMutableDictionary *nowPlayingInfo = nil;
 
 - (MPRemoteCommandHandlerStatus) nextTrack: (MPRemoteCommandEvent *) event {
     //NSLog(@"nextTrack");
-    [handlerChannel invokeMethod:@"fastForward" arguments:@{}];
+    [handlerChannel invokeMethod:@"skipToNext" arguments:@{}];
     return MPRemoteCommandHandlerStatusSuccess;
 }
 
 - (MPRemoteCommandHandlerStatus) previousTrack: (MPRemoteCommandEvent *) event {
     //NSLog(@"previousTrack");
-    [handlerChannel invokeMethod:@"rewind" arguments:@{}];
+    [handlerChannel invokeMethod:@"skipToPrevious" arguments:@{}];
     return MPRemoteCommandHandlerStatusSuccess;
 }
 
@@ -515,13 +515,13 @@ static NSMutableDictionary *nowPlayingInfo = nil;
 
 - (MPRemoteCommandHandlerStatus) skipForward: (MPRemoteCommandEvent *) event {
     //NSLog(@"skipForward");
-    [handlerChannel invokeMethod:@"skipToNext" arguments:@{}];
+    [handlerChannel invokeMethod:@"fastForward" arguments:@{}];
     return MPRemoteCommandHandlerStatusSuccess;
 }
 
 - (MPRemoteCommandHandlerStatus) skipBackward: (MPRemoteCommandEvent *) event {
     //NSLog(@"skipBackward");
-    [handlerChannel invokeMethod:@"skipToPrevious" arguments:@{}];
+    [handlerChannel invokeMethod:@"rewind" arguments:@{}];
     return MPRemoteCommandHandlerStatusSuccess;
 }
 
