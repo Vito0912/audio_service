@@ -148,6 +148,12 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
         return audioHandlerInterface;
     }
 
+    static synchronized void reconnectAudioHandler() {
+        if (audioHandlerInterface != null) {
+            AudioService.init(audioHandlerInterface);
+        }
+    }
+
     private static MediaBrowserCompat mediaBrowser;
     private static MediaControllerCompat mediaController;
     private static final MediaControllerCompat.Callback controllerCallback = new MediaControllerCompat.Callback() {
@@ -295,6 +301,8 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
         if (audioHandlerInterface != null
                 && audioHandlerInterface.messenger == flutterPluginBinding.getBinaryMessenger()) {
             System.out.println("### destroying audio handler interface");
+            flutterReady = false;
+            AudioService.detachListener(audioHandlerInterface);
             audioHandlerInterface.destroy();
             audioHandlerInterface = null;
         }
@@ -523,6 +531,7 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
         private List<MethodInvocation> methodInvocationQueue = new LinkedList<MethodInvocation>();
 
         public AudioHandlerInterface(BinaryMessenger messenger) {
+            flutterReady = false;
             this.messenger = messenger;
             channel = new MethodChannel(messenger, CHANNEL_HANDLER);
             channel.setMethodCallHandler(this);

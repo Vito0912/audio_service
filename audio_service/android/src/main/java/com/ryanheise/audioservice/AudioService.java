@@ -135,6 +135,14 @@ public class AudioService extends MediaBrowserServiceCompat {
         }
     }
 
+    static void detachListener(ServiceListener detachedListener) {
+        synchronized (AudioService.class) {
+            if (listener == detachedListener) {
+                listener = null;
+            }
+        }
+    }
+
     public static int toKeyCode(long action) {
         if (action == PlaybackStateCompat.ACTION_PLAY) {
             return KEYCODE_BYPASS_PLAY;
@@ -370,6 +378,7 @@ public class AudioService extends MediaBrowserServiceCompat {
         };
 
         flutterEngine = AudioServicePlugin.getFlutterEngine(this);
+        AudioServicePlugin.reconnectAudioHandler();
         System.out.println("flutterEngine warmed up");
     }
 
