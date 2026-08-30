@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.AudioManager;
@@ -317,6 +318,7 @@ public class AudioService extends MediaBrowserServiceCompat {
     private int repeatMode;
     private int shuffleMode;
     private boolean notificationCreated;
+    private boolean automotiveSystem;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private VolumeProviderCompat volumeProvider;
 
@@ -343,6 +345,7 @@ public class AudioService extends MediaBrowserServiceCompat {
         repeatMode = 0;
         shuffleMode = 0;
         notificationCreated = false;
+        automotiveSystem = getPackageManager().hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE);
         playing = false;
         processingState = AudioProcessingState.idle;
         mediaSession = new MediaSessionCompat(this, "media-session");
@@ -568,8 +571,21 @@ public class AudioService extends MediaBrowserServiceCompat {
         this.repeatMode = repeatMode;
         this.shuffleMode = shuffleMode;
 
+        if (automotiveSystem
+                && errorCode == null
+                && processingState != AudioProcessingState.idle
+                && processingState != AudioProcessingState.error
+                && !mediaSession.isActive()) {
+            mediaSession.setActive(true);
+        }
+
+        final long enabledActions = automotiveSystem
+                && errorCode != null
+                && errorCode == PlaybackStateCompat.ERROR_CODE_AUTHENTICATION_EXPIRED
+                ? 0
+                : AUTO_ENABLED_ACTIONS | actionBits;
         PlaybackStateCompat.Builder stateBuilder = new PlaybackStateCompat.Builder()
-                .setActions(AUTO_ENABLED_ACTIONS | actionBits)
+                .setActions(enabledActions)
                 .setState(getPlaybackState(), position, speed, updateTime)
                 .setBufferedPosition(bufferedPosition);
 
