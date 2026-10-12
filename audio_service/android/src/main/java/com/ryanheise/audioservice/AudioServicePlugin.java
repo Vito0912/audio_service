@@ -561,6 +561,13 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
 
         @Override
         public void onLoadChildren(final String parentMediaId, final MediaBrowserServiceCompat.Result<List<MediaBrowserCompat.MediaItem>> result, Bundle options) {
+            result.detach();
+            loadChildren(parentMediaId, result, options, android.os.SystemClock.uptimeMillis() + 30000);
+        }
+
+        private void loadChildren(final String parentMediaId,
+                final MediaBrowserServiceCompat.Result<List<MediaBrowserCompat.MediaItem>> result,
+                Bundle options, long loadingDeadline) {
             if (audioHandlerInterface != null) {
                 final int actionLimit = options == null ? 0 : options.getInt(CarBrowseActions.LIMIT_OPTION, 0);
                 Map<String, Object> args = new HashMap<>();
@@ -574,7 +581,12 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                                 && "browse_unavailable".equals(errorCode);
 
                         if (automotive && "browse_not_ready".equals(errorCode)) {
-                            result.sendResult(new ArrayList<>());
+                            if (AudioService.instance != null
+                                    && android.os.SystemClock.uptimeMillis() < loadingDeadline) {
+                                handler.postDelayed(() -> loadChildren(parentMediaId, result, options, loadingDeadline), 500);
+                            } else {
+                                result.sendError(new Bundle());
+                            }
                         } else if ("authentication_expired".equals(errorCode) || (automotive && rootError)) {
                             result.sendResult(null);
                         } else {
@@ -598,8 +610,9 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                         result.sendResult(mediaItems);
                     }
                 });
+            } else {
+                result.sendError(new Bundle());
             }
-            result.detach();
         }
 
         @Override
