@@ -468,6 +468,14 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                     throw new IllegalStateException("The Activity class declared in your AndroidManifest.xml is wrong or has not provided the correct FlutterEngine. Please see the README for instructions.");
                 }
                 switch (call.method) {
+                case "getCarConnectionType":
+                    if (AudioService.instance != null) {
+                        result.success(AudioService.instance.getCarConnectionType());
+                    } else {
+                        result.success(context != null && context.getPackageManager()
+                                .hasSystemFeature(android.content.pm.PackageManager.FEATURE_AUTOMOTIVE) ? 1 : 0);
+                    }
+                    break;
                 case "configure":
                     if (serviceConnectionFailed) {
                         throw new IllegalStateException("Unable to bind to AudioService. Please ensure you have declared a <service> element as described in the README.");
@@ -554,13 +562,20 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
         @Override
         public void onLoadChildren(final String parentMediaId, final MediaBrowserServiceCompat.Result<List<MediaBrowserCompat.MediaItem>> result, Bundle options) {
             if (audioHandlerInterface != null) {
+                final int actionLimit = options == null ? 0 : options.getInt(CarBrowseActions.LIMIT_OPTION, 0);
                 Map<String, Object> args = new HashMap<>();
                 args.put("parentMediaId", parentMediaId);
                 args.put("options", bundleToMap(options));
                 audioHandlerInterface.invokeMethod("getChildren", args, new MethodChannel.Result() {
                     @Override
                     public void error(String errorCode, String errorMessage, Object errorDetails) {
-                        if ("authentication_expired".equals(errorCode)) {
+                        boolean automotive = AudioService.instance != null && AudioService.instance.isAutomotiveSystem();
+                        boolean rootError = "root".equals(parentMediaId)
+                                && "browse_unavailable".equals(errorCode);
+
+                        if (automotive && "browse_not_ready".equals(errorCode)) {
+                            result.sendResult(new ArrayList<>());
+                        } else if ("authentication_expired".equals(errorCode) || (automotive && rootError)) {
                             result.sendResult(null);
                         } else {
                             result.sendError(new Bundle());
@@ -578,7 +593,7 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                         @SuppressWarnings("unchecked") List<Map<?, ?>> rawMediaItems = (List<Map<?, ?>>)response.get("children");
                         List<MediaBrowserCompat.MediaItem> mediaItems = new ArrayList<>();
                         for (Map<?, ?> rawMediaItem : rawMediaItems) {
-                            mediaItems.add(rawToMediaItem(rawMediaItem));
+                            mediaItems.add(rawToMediaItem(rawMediaItem, actionLimit));
                         }
                         result.sendResult(mediaItems);
                     }
@@ -590,6 +605,8 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
         @Override
         public void onLoadItem(String itemId, final MediaBrowserServiceCompat.Result<MediaBrowserCompat.MediaItem> result) {
             if (audioHandlerInterface != null) {
+                final int actionLimit = AudioService.instance == null ? 0 : CarBrowseActions.limit(
+                        AudioService.instance.isAutomotiveSystem(), AudioService.instance.getBrowserRootHints());
                 Map<String, Object> args = new HashMap<>();
                 args.put("mediaId", itemId);
 
@@ -609,7 +626,7 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                         Map<?, ?> response = (Map<?, ?>)obj;
                         Map<?, ?> rawMediaItem = (Map<?, ?>)response.get("mediaItem");
                         if (rawMediaItem != null) {
-                            MediaBrowserCompat.MediaItem mediaItem = rawToMediaItem(rawMediaItem);
+                            MediaBrowserCompat.MediaItem mediaItem = rawToMediaItem(rawMediaItem, actionLimit);
                             result.sendResult(mediaItem);
                         } else {
                             result.sendResult(null);
@@ -623,9 +640,13 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
         @Override
         public void onSearch(String query, Bundle extras, final MediaBrowserServiceCompat.Result<List<MediaBrowserCompat.MediaItem>> result) {
             if (audioHandlerInterface != null) {
+                final int actionLimit = AudioService.instance == null ? 0 : CarBrowseActions.limit(
+                        AudioService.instance.isAutomotiveSystem(), AudioService.instance.getBrowserRootHints());
+                Bundle searchExtras = extras == null ? new Bundle() : new Bundle(extras);
+                searchExtras.putInt(CarBrowseActions.LIMIT_OPTION, actionLimit);
                 Map<String, Object> args = new HashMap<>();
                 args.put("query", query);
-                args.put("extras", bundleToMap(extras));
+                args.put("extras", bundleToMap(searchExtras));
                 audioHandlerInterface.invokeMethod("search", args, new MethodChannel.Result() {
                     @Override
                     public void error(String errorCode, String errorMessage, Object errorDetails) {
@@ -643,7 +664,7 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                         @SuppressWarnings("unchecked") List<Map<?, ?>> rawMediaItems = (List<Map<?, ?>>)response.get("mediaItems");
                         List<MediaBrowserCompat.MediaItem> mediaItems = new ArrayList<>();
                         for (Map<?, ?> rawMediaItem : rawMediaItems) {
-                            mediaItems.add(rawToMediaItem(rawMediaItem));
+                            mediaItems.add(rawToMediaItem(rawMediaItem, actionLimit));
                         }
                         result.sendResult(mediaItems);
                     }
@@ -808,6 +829,52 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
             invokeMethod("setRating", mapOf(
                         "rating", rating2raw(rating),
                         "extras", null));
+        }
+
+        @Override
+        public void onBrowseCustomAction(String action, Bundle extras, MediaBrowserServiceCompat.Result<Bundle> result) {
+            final String mediaId = extras.getString(androidx.media.utils.MediaConstants.EXTRAS_KEY_CUSTOM_BROWSER_ACTION_MEDIA_ITEM_ID);
+            result.detach();
+
+            if (audioHandlerInterface == null) {
+                CarBrowseActions.finish(mediaId);
+                result.sendError(CarBrowseActions.response(mediaId, "Downloads are unavailable."));
+                return;
+            }
+
+            result.sendProgressUpdate(CarBrowseActions.response(mediaId, null));
+            audioHandlerInterface.invokeMethod("customAction", mapOf(
+                    "name", action,
+                    "extras", mapOf("mediaId", mediaId, "browseAction", true)), new MethodChannel.Result() {
+                @Override
+                public void success(Object value) {
+                    CarBrowseActions.finish(mediaId);
+                    if (!(value instanceof Map)) {
+                        result.sendError(CarBrowseActions.response(mediaId, "Unable to update the download."));
+                        return;
+                    }
+
+                    Map<?, ?> response = (Map<?, ?>) value;
+                    Bundle bundle = CarBrowseActions.fromResult(mediaId, response);
+                    if (Boolean.TRUE.equals(response.get("error"))) {
+                        result.sendError(bundle);
+                    } else {
+                        result.sendResult(bundle);
+                    }
+                }
+
+                @Override
+                public void error(String code, String message, Object details) {
+                    CarBrowseActions.finish(mediaId);
+                    result.sendError(CarBrowseActions.response(mediaId, "Unable to update the download. Check Downloads in Settings."));
+                }
+
+                @Override
+                public void notImplemented() {
+                    CarBrowseActions.finish(mediaId);
+                    result.sendError(CarBrowseActions.response(mediaId, "Downloads are unavailable."));
+                }
+            });
         }
 
         @Override
@@ -1195,8 +1262,13 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
     }
 
     private static MediaBrowserCompat.MediaItem rawToMediaItem(Map<?, ?> rawMediaItem) {
+        return rawToMediaItem(rawMediaItem, 0);
+    }
+
+    private static MediaBrowserCompat.MediaItem rawToMediaItem(Map<?, ?> rawMediaItem, int actionLimit) {
         MediaMetadataCompat mediaMetadata = createMediaMetadata(rawMediaItem);
-        final MediaDescriptionCompat description = addExtrasToMediaDescription(mediaMetadata.getDescription(), (Map<?, ?>)rawMediaItem.get("extras"));
+        final MediaDescriptionCompat description = CarBrowseActions.restrict(
+                addExtrasToMediaDescription(mediaMetadata.getDescription(), (Map<?, ?>)rawMediaItem.get("extras")), actionLimit);
         final Boolean playable = (Boolean)rawMediaItem.get("playable");
         return new MediaBrowserCompat.MediaItem(description, playable ? MediaBrowserCompat.MediaItem.FLAG_PLAYABLE : MediaBrowserCompat.MediaItem.FLAG_BROWSABLE);
     }
@@ -1246,6 +1318,13 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
             else if (value instanceof Double) bundle.putDouble(skey, (Double)value);
             else if (value instanceof Boolean) bundle.putBoolean(skey, (Boolean)value);
             else if (value instanceof String) bundle.putString(skey, (String)value);
+            else if (value instanceof List && ((List<?>) value).stream().allMatch(item -> item instanceof String)) {
+                ArrayList<String> strings = new ArrayList<>();
+                for (Object item : (List<?>) value) {
+                    strings.add((String) item);
+                }
+                bundle.putStringArrayList(skey, strings);
+            }
         }
         return bundle;
     }

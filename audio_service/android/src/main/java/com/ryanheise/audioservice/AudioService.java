@@ -8,6 +8,9 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import androidx.car.app.connection.CarConnection;
+import androidx.lifecycle.LiveData;
+import androidx.lifecycle.Observer;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.AudioManager;
@@ -319,6 +322,23 @@ public class AudioService extends MediaBrowserServiceCompat {
     private int shuffleMode;
     private boolean notificationCreated;
     private boolean automotiveSystem;
+    private LiveData<Integer> carConnection;
+    private int carConnectionType = CarConnection.CONNECTION_TYPE_NOT_CONNECTED;
+    private final Observer<Integer> carConnectionObserver = type -> {
+        carConnectionType = type == null ? CarConnection.CONNECTION_TYPE_NOT_CONNECTED : type;
+        if (carConnectionType == CarConnection.CONNECTION_TYPE_PROJECTION) {
+            notifyChildrenChanged(BROWSABLE_ROOT_ID);
+            notifyChildrenChanged(RECENT_ROOT_ID);
+        }
+    };
+
+    public int getCarConnectionType() {
+        return automotiveSystem ? CarConnection.CONNECTION_TYPE_NATIVE : carConnectionType;
+    }
+
+    public boolean isAutomotiveSystem() {
+        return automotiveSystem;
+    }
     private final Handler handler = new Handler(Looper.getMainLooper());
     private VolumeProviderCompat volumeProvider;
 
@@ -346,6 +366,10 @@ public class AudioService extends MediaBrowserServiceCompat {
         shuffleMode = 0;
         notificationCreated = false;
         automotiveSystem = getPackageManager().hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE);
+        if (!automotiveSystem) {
+            carConnection = new CarConnection(this).getType();
+            carConnection.observeForever(carConnectionObserver);
+        }
         playing = false;
         processingState = AudioProcessingState.idle;
         mediaSession = new MediaSessionCompat(this, "media-session");
@@ -398,6 +422,11 @@ public class AudioService extends MediaBrowserServiceCompat {
 
     @Override
     public void onDestroy() {
+        CarBrowseActions.clear();
+        if (carConnection != null) {
+            carConnection.removeObserver(carConnectionObserver);
+            carConnection = null;
+        }
         super.onDestroy();
         final ServiceListener destroyedListener;
         synchronized (AudioService.class) {
@@ -610,12 +639,21 @@ public class AudioService extends MediaBrowserServiceCompat {
                         signInIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
                 stateExtras.putString("android.media.extras.ERROR_RESOLUTION_ACTION_LABEL", "Sign in");
                 stateExtras.putParcelable("android.media.extras.ERROR_RESOLUTION_ACTION_INTENT", signInActivityPendingIntent);
+            } else if (automotiveSystem && errorCode == 1) {
+                Intent settingsIntent = new Intent(Intent.ACTION_APPLICATION_PREFERENCES);
+                settingsIntent.setComponent(new ComponentName(getPackageName(), "de.vito0912.yaabsa.MainActivity"));
+                settingsIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_NEW_TASK);
+                PendingIntent settingsPendingIntent = PendingIntent.getActivity(this, 1, settingsIntent,
+                        PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                stateExtras.putString("android.media.extras.ERROR_RESOLUTION_ACTION_LABEL", "Open Settings");
+                stateExtras.putParcelable("android.media.extras.ERROR_RESOLUTION_ACTION_INTENT", settingsPendingIntent);
             }
         } else if (errorMessage != null) {
             stateBuilder.setErrorMessage(-987654, errorMessage);
         }
 
-        if (mediaMetadata != null) {
+        if (mediaMetadata != null && (!automotiveSystem || playing)) {
             // Update the progress bar in the browse view as content is playing as explained
             // here: https://developer.android.com/training/cars/media#browse-progress-bar
             stateExtras.putString(MediaConstants.PLAYBACK_STATE_EXTRAS_KEY_MEDIA_ID, mediaMetadata.getDescription().getMediaId());
@@ -912,6 +950,16 @@ public class AudioService extends MediaBrowserServiceCompat {
         Boolean isRecentRequest = rootHints == null ? null : (Boolean)rootHints.getBoolean(BrowserRoot.EXTRA_RECENT);
         if (isRecentRequest == null) isRecentRequest = false;
         Bundle extras = config.getBrowsableRootExtras();
+
+        if (automotiveSystem) {
+            if (extras == null) {
+                extras = new Bundle();
+            }
+
+            extras.putBoolean(MediaConstants.BROWSER_SERVICE_EXTRAS_KEY_SEARCH_SUPPORTED, true);
+            CarBrowseActions.addToRoot(this, extras, CarBrowseActions.limit(automotiveSystem, rootHints));
+        }
+
         return new BrowserRoot(isRecentRequest ? RECENT_ROOT_ID : BROWSABLE_ROOT_ID, extras);
         // The response must be given synchronously, and we can't get a
         // synchronous response from the Dart layer. For now, we hardcode
@@ -926,16 +974,20 @@ public class AudioService extends MediaBrowserServiceCompat {
 
     @Override
     public void onLoadChildren(final String parentMediaId, final Result<List<MediaBrowserCompat.MediaItem>> result, Bundle options) {
-        if (listener == null) {
+        if (listener == null || (!automotiveSystem && carConnectionType != CarConnection.CONNECTION_TYPE_PROJECTION)) {
             result.sendResult(new ArrayList<>());
             return;
         }
-        listener.onLoadChildren(parentMediaId, result, options);
+        Bundle browseOptions = options == null ? new Bundle() : new Bundle(options);
+        browseOptions.putInt(CarBrowseActions.LIMIT_OPTION,
+                CarBrowseActions.limit(automotiveSystem, getBrowserRootHints()));
+
+        listener.onLoadChildren(parentMediaId, result, browseOptions);
     }
 
     @Override
     public void onLoadItem(String itemId, Result<MediaBrowserCompat.MediaItem> result) {
-        if (listener == null) {
+        if (listener == null || (!automotiveSystem && carConnectionType != CarConnection.CONNECTION_TYPE_PROJECTION)) {
             result.sendResult(null);
             return;
         }
@@ -944,11 +996,35 @@ public class AudioService extends MediaBrowserServiceCompat {
 
     @Override
     public void onSearch(String query, Bundle extras, Result<List<MediaBrowserCompat.MediaItem>> result) {
-        if (listener == null) {
+        if (listener == null || (!automotiveSystem && carConnectionType != CarConnection.CONNECTION_TYPE_PROJECTION)) {
             result.sendResult(new ArrayList<>());
             return;
         }
         listener.onSearch(query, extras, result);
+    }
+
+    @Override
+    public void onCustomAction(String action, Bundle extras, Result<Bundle> result) {
+        if (!CarBrowseActions.supports(action)) {
+            super.onCustomAction(action, extras, result);
+            return;
+        }
+
+        String mediaId = extras == null ? null
+                : extras.getString(MediaConstants.EXTRAS_KEY_CUSTOM_BROWSER_ACTION_MEDIA_ITEM_ID);
+
+        if (listener == null || mediaId == null || mediaId.isEmpty()
+                || CarBrowseActions.limit(automotiveSystem, getBrowserRootHints()) <= 0) {
+            result.sendError(CarBrowseActions.response(mediaId, "This action is unavailable."));
+            return;
+        }
+
+        if (!CarBrowseActions.begin(mediaId, action)) {
+            result.sendError(CarBrowseActions.response(mediaId, "A download action is already in progress."));
+            return;
+        }
+
+        listener.onBrowseCustomAction(action, extras, result);
     }
 
     @Override
@@ -1229,6 +1305,7 @@ public class AudioService extends MediaBrowserServiceCompat {
         void onSetRepeatMode(int repeatMode);
         void onSetShuffleMode(int shuffleMode);
         void onCustomAction(String action, Bundle extras);
+        void onBrowseCustomAction(String action, Bundle extras, Result<Bundle> result);
         void onAddQueueItem(MediaMetadataCompat metadata);
         void onAddQueueItemAt(MediaMetadataCompat metadata, int index);
         void onRemoveQueueItem(MediaMetadataCompat metadata);

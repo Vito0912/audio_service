@@ -200,11 +200,13 @@ class MethodChannelAudioService extends AudioServicePlatform {
             SetSpeedRequest(speed: call.arguments['speed'] as double));
         return null;
       case 'customAction':
-        await callbacks.customAction(CustomActionRequest(
+        final response = await callbacks.customAction(CustomActionRequest(
             name: call.arguments['name'] as String,
             extras:
                 _castMap(call.arguments['extras'] as Map<dynamic, dynamic>?)));
-        return null;
+        return call.arguments['extras']?['browseAction'] == true
+            ? response
+            : null;
       case 'onTaskRemoved':
         await callbacks.onTaskRemoved(const OnTaskRemovedRequest());
         return null;
